@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D PARTICLE ROSE</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            overflow: hidden; 
+            background: #000000; 
+            font-family: 'Courier New', monospace;
+        }
+        canvas { display: block; }
+        #info {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 12px;
+            pointer-events: none;
+            letter-spacing: 2px;
+            text-align: center;
+            white-space: normal;
+            max-width: 90vw;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">3D PARTICLE ROSE TO YUANWENQIAN</div>
+    <video id="input-video" style="display:none;" autoplay playsinline muted></video>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 50, 0.01);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.2;
+controls.enablePan = false;
+controls.minDistance = 15;
+controls.maxDistance = 60;
+controls.target.set(0, 0, 0);
+controls.minPolarAngle = 0;
+controls.maxPolarAngle = 0.02;
+
+// ========== 粒子系统 ==========
+const particleCount = 50000;
+const positions = new Float32Array(particleCount * 3);
+const rosePositions = new Float32Array(particleCount * 3);
+const colors = new Float32Array(particleCount * 3);
+const sizes = new Float32Array(particleCount);
+const randoms = new Float32Array(particleCount);
+
+const tempColor = new THREE.Color();
+const cCore  = new THREE.Color(0xff0022);
+const cInner = new THREE.Color(0xff2244);
+const cMid   = new THREE.Color(0xff4466);
+const cOuter = new THREE.Color(0xff6688);
+const cEdge  = new THREE.Color(0xffbbcc);
+
+function getRosePoint(i) {
+    const layer = i / particleCount;
+    let x, y, z;
+
+    if (layer < 0.10) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const r = 1.0 + Math.random() * 1.5;
+        x = r * Math.sin(phi) * Math.cos(theta);
+        y = r * Math.cos(phi) + 2.5;
+        z = r * Math.sin(phi) * Math.sin(theta);
+        tempColor.copy(cCore).lerp(cInner, Math.random());
+
+    } else if (layer < 0.45) {
+        const t = Math.random() * Math.PI * 2;
+        const p = Math.random() * Math.PI * 0.55;
+        const petals = 5;
+        const petalMod = Math.abs(Math.cos(petals * t * 0.5));
+        const r = 3.0 + petalMod * 3.5 + Math.random() * 0.8;
+        const hf = Math.sin(p);
+        const rr = r * (0.7 + 0.3 * hf);
+        x = rr * Math.sin(p) * Math.cos(t);
+        y = rr * Math.cos(p) + 3;
+        z = rr * Math.sin(p) * Math.sin(t);
+        const mix = (rr - 3) / 6;
+        tempColor.copy(cInner).lerp(cMid, mix + Math.random() * 0.2);
+
+    } else {
+        const t = Math.random() * Math.PI * 2;
+        const p = Math.acos(1 - Math.random() * 0.8);
+        const petals = 7;
+        const petalMod = Math.abs(Math.cos(petals * t * 0.5));
+        let r = 5.5 + petalMod * 5.0 + Math.random() * 1.5;
+        const flatten = Math.sin(p * 0.65);
+        r *= (0.5 + 0.5 * flatten);
+        x = r * Math.sin(p) * Math.cos(t);
+        y = r * Math.cos(p) * 0.7 + 2;
+        z = r * Math.sin(p) * Math.sin(t);
+        const dist = Math.sqrt(x*x + z*z);
+        const mix = Math.min(1, (dist - 5.5) / 10);
+        tempColor.copy(cMid).lerp(cOuter, mix);
+        if (mix > 0.5) tempColor.lerp(cEdge, (mix - 0.5) * 2);
+    }
+
+    x += (Math.random() - 0.5) * 0.5;
+    y += (Math.random() - 0.5) * 0.5;
+    z += (Math.random() - 0.5) * 0.5;
+
+    return { x, y, z, color: tempColor.clone() };
+}
+
+function getScatterPoint() {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = 15 + Math.random() * 35;
+    return {
+        x: r * Math.sin(phi) * Math.cos(theta),
+        y: r * Math.cos(phi) + (Math.random() - 0.5) * 20,
+        z: r * Math.sin(phi) * Math.sin(theta)
+    };
+}
+
+for (let i = 0; i < particleCount; i++) {
+    const rose = getRosePoint(i);
+    const scatter = getScatterPoint();
+
+    rosePositions[i * 3] = rose.x;
+    rosePositions[i * 3 + 1] = rose.y;
+    rosePositions[i * 3 + 2] = rose.z;
+
+    positions[i * 3] = scatter.x;
+    positions[i * 3 + 1] = scatter.y;
+    positions[i * 3 + 2] = scatter.z;
+
+    colors[i * 3] = rose.color.r;
+    colors[i * 3 + 1] = rose.color.g;
+    colors[i * 3 + 2] = rose.color.b;
+    sizes[i] = Math.random() * 0.22 + 0.10;
+    randoms[i] = Math.random();
+}
+
+const geometry = new THREE.BufferGeometry();
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute('rosePos', new THREE.BufferAttribute(rosePositions, 3));
+geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+geometry.setAttribute('random', new THREE.BufferAttribute(randoms, 1));
+
+const material = new THREE.ShaderMaterial({
+    uniforms: {
+        time: { value: 0 },
+        pixelRatio: { value: renderer.getPixelRatio() },
+        uMorph: { value: 0 }
+    },
+    vertexShader: `
+        attribute float size;
+        attribute float random;
+        attribute vec3 rosePos;
+        varying vec3 vColor;
+        varying float vRandom;
+        uniform float time;
+        uniform float pixelRatio;
+        uniform float uMorph;
+
+        void main() {
+            vColor = color;
+            vRandom = random;
+            
+            vec3 pos = mix(position, rosePos, uMorph);
+            
+            float drift = (1.0 - uMorph) * 0.6;
+            pos.x += sin(time * 0.35 + random * 6.283) * drift;
+            pos.y += cos(time * 0.45 + random * 4.712) * drift;
+            pos.z += sin(time * 0.25 + random * 3.142) * drift;
+            
+            vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+            
+            float breathe = 1.0 + 0.10 * sin(time * 1.5 + random * 6.28) * uMorph;
+            float twinkle = 1.0 + 0.20 * sin(time * 3.0 + random * 20.0);
+            float sizeScale = 0.55 + 0.45 * uMorph;
+            
+            gl_PointSize = size * pixelRatio * 380.0 / -mvPosition.z * breathe * twinkle * sizeScale;
+            gl_Position = projectionMatrix * mvPosition;
+        }
+    `,
+    fragmentShader: `
+        varying vec3 vColor;
+        varying float vRandom;
+        uniform float time;
+        uniform float uMorph;
+
+        void main() {
+            vec2 c = gl_PointCoord - vec2(0.5);
+            float d = length(c);
+            if (d > 0.5) discard;
+            
+            float core = 1.0 - smoothstep(0.0, 0.12, d);
+            float mid  = 1.0 - smoothstep(0.0, 0.30, d);
+            float edge = 1.0 - smoothstep(0.0, 0.5, d);
+            
+            float glow = core * 2.5 + mid * 1.0 + edge * 0.2;
+            vec3 col = vColor * (1.2 + glow * 2.0);
+            col = max(col, vColor * 0.8);
+            
+            float alpha = edge * (0.45 + 0.55 * uMorph);
+            gl_FragColor = vec4(col, alpha * 0.92);
+        }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    vertexColors: true
+});
+
+const particles = new THREE.Points(geometry, material);
+scene.add(particles);
+
+// 环境粒子
+const ambientCount = 1000;
+const aPos = new Float32Array(ambientCount * 3);
+const aColor = new Float32Array(ambientCount * 3);
+for (let i = 0; i < ambientCount; i++) {
+    aPos[i*3] = (Math.random() - 0.5) * 50;
+    aPos[i*3+1] = (Math.random() - 0.5) * 50;
+    aPos[i*3+2] = (Math.random() - 0.5) * 50;
+    const intensity = 0.4 + Math.random() * 0.4;
+    aColor[i*3] = 1.0;
+    aColor[i*3+1] = 0.5 + Math.random() * 0.3;
+    aColor[i*3+2] = 0.6 + Math.random() * 0.2;
+}
+const aGeo = new THREE.BufferGeometry();
+aGeo.setAttribute('position', new THREE.BufferAttribute(aPos, 3));
+aGeo.setAttribute('color', new THREE.BufferAttribute(aColor, 3));
+const aMat = new THREE.PointsMaterial({
+    size: 0.10,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.3,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+});
+const ambient = new THREE.Points(aGeo, aMat);
+scene.add(ambient);
+
+// ========== MediaPipe 手势识别 ==========
+let handLandmarker = null;
+let video = null;
+let gestureHistory = [];
+const HISTORY_LENGTH = 8;
+let confirmedGesture = 'none';
+let morphTarget = 0;
+let morphCurrent = 0;
+let lastVideoTime = -1;
+
+async function initHandLandmarker() {
+    const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+    );
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+            delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        numHands: 1
+    });
+}
+
+async function startCamera() {
+    video = document.getElementById('input-video');
+    const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 320, height: 240, facingMode: 'user' }
+    });
+    video.srcObject = stream;
+    await new Promise(resolve => { video.onloadedmetadata = resolve; });
+    await video.play();
+}
+
+function getDist(a, b) {
+    return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
+}
+
+function detectGesture(landmarks) {
+    if (!landmarks || landmarks.length === 0) return 'none';
+    const lm = landmarks[0];
+    const wrist = lm[0];
+    
+    const tips = [8, 12, 16, 20];
+    const mcps = [5, 9, 13, 17];
+    
+    let extended = 0;
+    for (let i = 0; i < 4; i++) {
+        const tipDist = getDist(lm[tips[i]], wrist);
+        const mcpDist = getDist(lm[mcps[i]], wrist);
+        if (tipDist > mcpDist * 1.5) extended++;
+    }
+    
+    if (extended <= 1) return 'fist';
+    if (extended >= 3) return 'palm';
+    return 'none';
+}
+
+function updateGesture(gesture) {
+    gestureHistory.push(gesture);
+    if (gestureHistory.length > HISTORY_LENGTH) gestureHistory.shift();
+    
+    const counts = {};
+    for (const g of gestureHistory) counts[g] = (counts[g] || 0) + 1;
+    
+    let maxCount = 0, detected = 'none';
+    for (const [g, c] of Object.entries(counts)) {
+        if (c > maxCount) { maxCount = c; detected = g; }
+    }
+    return (maxCount >= HISTORY_LENGTH * 0.5) ? detected : 'none';
+}
+
+async function predictWebcam() {
+    if (!handLandmarker || !video || video.paused) {
+        requestAnimationFrame(predictWebcam);
+        return;
+    }
+    
+    if (video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        const results = handLandmarker.detectForVideo(video, performance.now());
+        const gesture = detectGesture(results.landmarks);
+        const stableGesture = updateGesture(gesture);
+        
+        if (stableGesture !== confirmedGesture) {
+            confirmedGesture = stableGesture;
+            if (stableGesture === 'fist') morphTarget = 1;
+            else if (stableGesture === 'palm') morphTarget = 0;
+        }
+    }
+    
+    requestAnimationFrame(predictWebcam);
+}
+
+// ========== 动画 ==========
+const clock = new THREE.Clock();
+function animate() {
+    requestAnimationFrame(animate);
+    const time = clock.getElapsedTime();
+    material.uniforms.time.value = time;
+    
+    morphCurrent += (morphTarget - morphCurrent) * 0.03;
+    material.uniforms.uMorph.value = morphCurrent;
+    
+    particles.rotation.y = time * 0.12;
+    
+    const floatY = Math.sin(time * 0.6) * 0.4;
+    particles.position.y = floatY;
+    
+    ambient.rotation.y = -time * 0.03;
+    ambient.rotation.x = time * 0.02;
+    
+    controls.update();
+    renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    material.uniforms.pixelRatio.value = renderer.getPixelRatio();
+});
+
+// ========== 启动（并行加载，权限立即弹出） ==========
+async function init() {
+    // 并行执行：摄像头权限请求 + 模型下载，互不阻塞
+    const camPromise = startCamera().catch(err => {
+        console.error('Camera failed:', err);
+        return null;
+    });
+    
+    const modelPromise = initHandLandmarker().catch(err => {
+        console.error('Model failed:', err);
+        return null;
+    });
+    
+    await Promise.all([camPromise, modelPromise]);
+    
+    if (handLandmarker && video) {
+        predictWebcam();
+    }
+    
+    animate();
+}
+
+init();
+</script>
+</body>
+</html>
